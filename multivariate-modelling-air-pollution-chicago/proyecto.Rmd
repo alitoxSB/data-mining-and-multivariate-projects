@@ -1,0 +1,322 @@
+---
+title: "Proyecto Final. 🚀"
+author: "Jorge Morales, Tomás Sandí y Alejandro Zamora."
+date: "5/4/2022"
+output:
+  html_document:
+    rmdformats::downcute
+---
+
+```{r,warning=FALSE,message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Librerias
+library(dplyr)
+library(tidyverse)
+library(PASWR)
+library(ggplot2)
+library(TSstudio)
+library(corrplot)
+library(DAAG)
+library(mvnormtest)
+library(normtest)
+library(MVN)
+library(TSstudio)
+```
+
+## Importacion de datos
+
+
+```{r,warning=FALSE,message=FALSE}
+datos_originales <- readRDS("chicago.rds")
+
+```
+
+## Descripcion de los datos
+
+```{r,warning=FALSE,message=FALSE}
+
+summary(datos_originales)
+
+glimpse(datos_originales)
+
+unique(datos_originales$city)
+
+```
+* city: Ciudad de Chicago (no aporta valor: borrar)
+* tmpd: temperatura en grados fahrenheit (desde los -16 a 92 F)
+* dptp: total de muertes por dia
+* date: Dias (desde el 1987-01-01 al 2005-12-31)
+* pm25tmean2: cantidad promedio de particulas menores a los 2.5 microgramos por metro cubico (mas preligrosas, presenta muchos datos faltantes)
+* pm10tmean2: cantidad promedio de particulas entre 2.5 y 10 microgramos por metro cubico (presenta algunos datos faltantes)
+* o3tmean2: Promedio de Ozono medido en partes por millon
+* no2tmean2: Dioxido de Nitrogeno promedio en partes por millon
+
+# Analisis exploratorio
+
+#### Datos faltantes
+```{r,warning=FALSE,message=FALSE}
+# Grafico pm25tmean2 vs tiempo: NA = -50
+grafico1 <- datos_originales %>% 
+  mutate(na_cero_pm25 = ifelse(is.na(pm25tmean2), -50, pm25tmean2)) %>% 
+  dplyr::select(date, na_cero_pm25) 
+
+ts_plot(grafico1)
+
+cant_filas = 6940
+
+cant_na_pm25tmean2 = 4447
+
+cant_na_pm25tmean2/cant_filas #% NAs pm25tmean2
+
+cant_na_pm10tmean2 = 242
+
+cant_na_pm10tmean2/cant_filas # % NAs pm10tmean2
+
+```
+
+
+
+
+* pm25tmean2
+  * No hay datos de pm25tmean2 desde 1987 hasta 1998
+  * Varios de los datos a partir de 1998 tienen datos faltantes pm25tmean2
+  * 64% de la variable pm25tmean2 es faltante (recomendable eliminar la variable)
+* pm10tmean2
+  * 3% de la variable pm10tmean2 es faltante (se puede filtrar)
+
+#### Distribucion de variables
+```{r,warning=FALSE,message=FALSE}
+# tmpd
+EDA(sample(datos_originales$tmpd      , size = 5000))
+EDA(sample((datos_originales$tmpd)^1.2      , size = 5000))
+
+```
+```{r,warning=FALSE,message=FALSE}
+data <- datos_originales
+data_numeric <- dplyr::select(data, -date, -city)
+```
+```{r,warning=FALSE,message=FALSE}
+library(psych)
+multi.hist(x = data_numeric, dcol = c("blue", "red"), dlty = c("dotted", "solid"),
+           main = "")
+```
+
+* tmpd
+  * NO se presenta normalidad (según prueba de hipótesis al 95% de confianza), principalmente en las colas
+  * Sesgo en cola IZQUIERDA (se podria transformar elevando a 1.2)
+  * Sin valores extremos
+  * Aparentemente BIMODAL
+  
+```{r,warning=FALSE,message=FALSE}
+# dptp
+EDA(sample(datos_originales$dptp      , size = 5000))
+EDA(sample((datos_originales$dptp)^1.2      , size = 5000))
+
+```
+
+* dptp
+  * NO se presenta normalidad, principalmente en las colas
+  * Sesgo en cola IZQUIERDA (se podria transformar elevando a 1.2)
+  * Presenta valores extremos en cola IZQUIERDA
+  * Aparentemente BIMODAL
+  
+```{r,warning=FALSE,message=FALSE}
+# pm25tmean2
+EDA(sample(datos_originales$pm25tmean2, size = 5000))
+
+max_1 <- max(datos_originales$pm25tmean2, na.rm = TRUE)
+max_2 <- max(filter(datos_originales, pm25tmean2 != max_1)$pm25tmean2, na.rm = TRUE)
+
+EDA(sample(sqrt(filter(datos_originales, !(pm25tmean2 %in% c(max_1, max_2)))$pm25tmean2), size = 5000))
+
+```
+
+* pm25tmean2
+  * NO se presenta normalidad
+  * Sesgo en cola DERECHA (se podria centrar con RAIZ CUADRADA)
+  * Presenta valores extremos en cola DERECHA (recomendable FILTRARLOS)
+  * UNIMODAL
+  
+```{r,warning=FALSE,message=FALSE}
+# pm10tmean2
+EDA(sample(datos_originales$pm10tmean2, size = 5000))
+
+max_1 <- max(datos_originales$pm10tmean2, na.rm = TRUE)
+max_2 <- max(filter(datos_originales, pm10tmean2 != max_1)$pm10tmean2, na.rm = TRUE)
+
+EDA(sample(log(filter(datos_originales, !(pm10tmean2 %in% c(max_1, max_2)))$pm10tmean2), size = 5000))
+
+```
+
+* pm10tmean2
+  * NO se presenta normalidad
+  * Sesgo en cola DERECHA (se podria centrar con LOGARITMO)
+  * Presenta valores extremos en cola DERECHA (recomendable FILTRARLOS)
+  * UNIMODAL
+
+```{r,warning=FALSE,message=FALSE}
+# o3tmean2
+EDA(sample(datos_originales$o3tmean2  , size = 5000))
+EDA(sample(sqrt(datos_originales$o3tmean2)  , size = 5000))
+
+```
+
+* o3tmean2
+  * NO se presenta normalidad
+  * Sesgo en cola DERECHA (se podria centrar con RAIZ CUADRADA)
+  * Presenta valores extremos en cola DERECHA
+  * UNIMODAL
+
+```{r,warning=FALSE,message=FALSE}
+# no2tmean2
+EDA(sample(datos_originales$no2tmean2, size = 5000))
+EDA(sample(sqrt(datos_originales$no2tmean2), size = 5000))
+```
+
+* no2tmean2
+  * NO se presenta normalidad
+  * Sesgo en cola DERECHA (se podria centrar con RAIZ CUADRADA)
+  * Presenta valores extremos en cola DERECHA
+  * UNIMODAL
+
+#### Correlacion
+
+```{r,warning=FALSE,message=FALSE}
+correlaciones <- cor(datos_originales %>% dplyr::select(-c(city)) %>% mutate(date = as.numeric(date)), use = "complete.obs")
+  
+corrplot(correlaciones, method = "number")
+```
+* Pareciera haber relacion entre las variables temperatura, muertes por dia y ozono
+* Las variables de particulas en el aire aparece correlacionadas entre si y con nitrogeno
+
+## Limpieza de datos (data cleaning)
+
+
+
+```{r,warning=FALSE,message=FALSE}
+ts_plot(dplyr::select(data,tmpd,date),
+        title = "temperatura en grados fahrenheit (desde los -16 a 92 F)",
+        Xtitle = "Time",
+        Ytitle = "temperatura")
+```
+```{r,warning=FALSE,message=FALSE}
+ts_plot(dplyr::select(data,pm10tmean2,date),
+        title = "cantidad promedio de particulas menores a los 2.5 microgramos por metro cubico (mas preligrosas)",
+        Xtitle = "particulas",
+        Ytitle = "temperatura")
+```
+
+```{r,warning=FALSE,message=FALSE}
+ts_plot(dplyr::select(data,pm10tmean2,tmpd,date),
+        title = "cantidad promedio de particulas menores a los 2.5 microgramos por metro cubico vs temperatura en grados fahrenheit (desde los -16 a 92 F)",
+        Xtitle = "particulas",
+        Ytitle = "temperatura")
+```
+
+Prueba de normalidad multivariada.
+```{r,warning=FALSE,message=FALSE}
+result <- mvn(data = data_numeric, mvnTest = "mardia")
+result$multivariateNormality
+```
+Los datos no siguen una distribución normal multivariada.
+
+```{r,warning=FALSE,message=FALSE}
+library(GGally)
+ggpairs(data, lower = list(continuous = "smooth"),
+        diag = list(continuous = "barDiag"), axisLabels = "none")
+```
+
+```{r}
+library(psych)
+multi.hist(x = data_numeric, dcol = c("blue", "red"), dlty = c("dotted", "solid"),
+           main = "")
+```
+# Pruebas estadísticas t-test.
+```{r}
+t.test(data$pm10tmean2,data$tmpd) # where y1 and y2 are numeric
+```
+
+```{r}
+t.test(data$pm10tmean2,mu=3)
+```
+
+#---------------------------------------------------
+
+
+
+# Construcción del modelo, seleccionando los predictores de forma aleatoria.
+```{r,warning=FALSE,message=FALSE}
+# Multiple Linear Regression Example
+fit <- lm(cbind(pm10tmean2, tmpd)  ~  dptp + date + pm25tmean2 +
+               pm10tmean2 + pm10tmean2 + o3tmean2 + no2tmean2, data=data)
+summary(fit) # show results
+```
+```{r,warning=FALSE,message=FALSE}
+coefficients(fit)
+```
+```{r,warning=FALSE,message=FALSE}
+confint(fit, level=0.95)
+```
+
+```{r}
+new_data <- data[1:1000,]
+```
+
+
+```{r}
+# compare models
+fit1 <- lm(cbind(pm10tmean2, tmpd)  ~  dptp + date +
+               pm10tmean2 + pm10tmean2 + o3tmean2 + no2tmean2, data=new_data)
+fit2 <- lm(cbind(pm10tmean2, tmpd)  ~  dptp + date +
+               pm10tmean2 + no2tmean2, data=new_data)
+anova(fit1, fit2)
+```
+
+
+
+El modelo con todas las variables introducidas como predictores tiene un R2 considerable (0.6181), es capaz de explicar el 61,81% de la variabilidad observada en cantidad promedio de particulas entre 2.5 y 10 microgramos por metro cubico. 
+El p-value del modelo es significativo (2.2e-16) por lo que se puede aceptar que el modelo no es por azar.
+
+Ahora podemos usar el comando "anova" para comparar el modelo con todas las variables con el modelo con solo las variables significativas para entender si los resultados son estadísticamente diferentes.
+
+
+Explorar los datos univariados y bivariados
+```{r,warning=FALSE,message=FALSE}
+summary(data)
+pairs(data_numeric)
+```
+Creamos el vector de variables respuesta en función de las predictoras, y corremos el modelo de regresión multivariado.
+
+```{r,warning=FALSE,message=FALSE}
+
+mlm1 <- lm(cbind(tmpd, dptp) ~ pm25tmean2 + pm10tmean2 + o3tmean2 + no2tmean2, data = data)
+summary(mlm1)
+```
+
+
+Buscamos entender de forma separada las variables
+```{r}
+m1 <- lm(tmpd ~ dptp + pm25tmean2 + pm10tmean2 + o3tmean2, data = data)
+summary(m1)
+m2 <- lm(pm25tmean2 ~ tmpd + dptp + pm10tmean2 + o3tmean2 + no2tmean2, data = data)
+summary(m2)
+```
+
+
+```{r}
+lr.model.prob <- predict(m1, type = "response")
+lr.model.prob[1:30]
+```
+
+
+```{r}
+# diagnostic plots
+new_data <- data[1:100,]
+fit1 <- lm(cbind(tmpd)  ~ pm10tmean2 +dptp + date +
+               pm10tmean2 + pm10tmean2 + o3tmean2 + no2tmean2, data=new_data)
+layout(matrix(c(1,2,3,4),2,2)) # optional 4 graphs/page
+plot(fit1)
+```
+
+
