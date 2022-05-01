@@ -1,0 +1,1426 @@
+---
+title: "Tarea #4"
+author: "Alejandro Zamora"
+date: "17/03/2022"
+output:
+  html_document:
+    rmdformats::downcute
+---
+
+# Ejercicio 1 (35 puntos)
+
+Cargue los datos que se encuentran en el archivo “estrellas.csv”, el conjunto de datos tiene 17898
+observaciones y 9 variables en cada una. Específicamente, este dataset contiene información
+estadística de estrellas pulsares obtenidos por el trabajo High Time Resolution Universe Survey
+(https://arxiv.org/abs/1006.5744), y cuyas variables son.\
+
+• Media del perfil integrado\
+• Desviaciación estándar del perfil integrado\
+• Exceso de curtosis del perfil integrado\
+• Asimetría del perfil integrado\
+• Media de la curva DM-SNR\
+• Desviación estándar de la curva DM-SNR\
+• Exceso de curtosis de la curva DM-SNR\
+• Asimetría de la curva DM-SNR\
+• Clase de la estrella
+
+```{r,warning=FALSE,message=FALSE}
+library(ggplot2)
+library(tidyr)
+library(normtest)
+library(dplyr)
+library(rpart)
+library(plotly)
+library(ggraph)
+library("readxl")
+library(ROCR)
+library(corrplot)
+library(ggplot2)
+library(ggpubr)
+library(PerformanceAnalytics)
+library(ISLR)
+library(tidyverse)
+library(covTestR)
+library(rmdformats)
+library(pROC)
+library("mvnormtest")
+library(factoextra)
+library(DT)
+library(caret)
+library(recipes)
+library(e1071)
+library(randomForest)
+```
+
+```{r,warning=FALSE,message=FALSE}
+library("readxl")
+estrellas <- read_csv("DatosEstrellas.csv")
+```
+
+```{r,warning=FALSE,message=FALSE}
+DT::datatable(estrellas[1:9,])
+```
+Convertimos la variable class a factor.
+```{r,warning=FALSE,message=FALSE}
+estrellas$target_class <- as.factor(estrellas$target_class)
+```
+
+
+```{r,warning=FALSE,message=FALSE}
+# Número de datos ausentes por variable
+map_dbl(estrellas, .f = function(x){sum(is.na(x))})
+```
+```{r,warning=FALSE,message=FALSE}
+estrellas %>% map_lgl(.f = function(x){any(!is.na(x) & x == "")})
+```
+Distribución de la variable respuesta
+
+```{r,warning=FALSE,message=FALSE}
+ggplot(data = estrellas, aes(x = estrellas$target_class, y = ..count.., fill = estrellas$target_class )) +
+  geom_bar() +
+  scale_fill_manual(values = c("magenta", "blue")) +
+  labs(title = "Target Class") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+Vemos a nivel de porcentajes la diferencias en cantidad.
+```{r,warning=FALSE,message=FALSE}
+tmp<-table(estrellas$target_class)
+df<-as.data.frame(tmp)
+colnames(df)<-c("class","Cantidad")
+df$Porcentaje<-df$Cantidad/sum(df$Cantidad)
+DT:::datatable(df)%>%formatPercentage("Porcentaje",2)
+```
+
+Se valida que el porcentaje de acierto sea superior a lo esperado por azar.
+```{r,warning=FALSE,message=FALSE}
+n.observaciones <- nrow(estrellas)
+predicciones <- rep(x = 0,  n.observaciones)
+mean(predicciones == estrellas$target_class) * 100
+```
+
+```{r,warning=FALSE,message=FALSE}
+p2 <- ggplot(data = estrellas, aes(x = estrellas$`Standard deviation of the integrated profile`, y = target_class, color = target_class)) +
+      geom_boxplot(outlier.shape = NA) +
+      geom_jitter(alpha = 0.3, width = 0.15) +
+      scale_color_manual(values = c("magenta", "blue")) +
+      theme_bw()
+final.plot <- ggarrange(p2, legend = "top")
+final.plot <- annotate_figure(final.plot, top = text_grob("target_class", size = 15))
+final.plot
+```
+
+Estudio de la Correlación entre variables continuas
+
+```{r,warning=FALSE,message=FALSE}
+chart.Correlation(estrellas[,1:8], histogram = TRUE, method = "pearson")
+```
+
+```{r,warning=FALSE,message=FALSE}
+corrplot(cor(estrellas[,1:8]),        # Matriz de correlación
+         method = "shade", # Método para el gráfico de correlación
+         type = "full",    # Estilo del gráfico (también "upper" y "lower")
+         diag = TRUE,      # Si TRUE (por defecto), añade la diagonal
+         tl.col = "black", # Color de las etiquetas
+         bg = "white",     # Color de fondo
+         title = "",       # Título
+         col = NULL)  
+
+```
+Función de indicadores de Calidad.
+```{r}
+indicadores.calidad<-function(matriz.confusion)
+{
+  Total.obs<-sum(matriz.confusion)
+  a<-matriz.confusion[1,1]
+  b<-matriz.confusion[1,2] 
+  c<-matriz.confusion[2,1] 
+  d<-matriz.confusion[2,2]
+
+  Precision.Global<- (a+d)/Total.obs
+  Error.Global<- 1 - Precision.Global
+  Precision.Positiva<- d/(c+d)
+  Precision.Negativa<- a/(a+b)
+  Falsos.Positivos<- c/(c+d)
+  Falsos.Negativos<-b/(a+b)
+  Asertividad.Positiva<-d/(b+d)
+  Asertividad.Negatividad<-a/(a+c)
+  
+  Indicadores<-data.frame(
+    Precision.Global = Precision.Global,
+    Error.Global = Error.Global,
+    Precision.Positiva = Precision.Positiva,
+    Precision.Negativa = Precision.Negativa,
+    Falsos.Positivos = Falsos.Positivos,
+    Falsos.Negativos = Falsos.Negativos,
+    Asertividad.Positiva = Asertividad.Positiva,
+    Asertividad.Negatividad = Asertividad.Negatividad
+  )
+  
+  return(Indicadores)
+}
+
+```
+
+
+Realice lo siguiente:
+
+## 1. Cree dos datasets:
+a. 80% de los datos para training
+b. 20% para testing
+
+```{r,warning=FALSE,message=FALSE}
+set.seed(123)
+# Se crean los índices de las observaciones de entrenamiento
+train <- createDataPartition(y = estrellas$target_class, p = 0.8, list = FALSE, times = 1)
+estrellas.train <- estrellas[train, ]
+estrellas.test  <- estrellas[-train, ]
+```
+
+```{r,warning=FALSE,message=FALSE}
+pro.train<-as.data.frame(table(estrellas.train$target_class))
+pro.test<-as.data.frame(table(estrellas.test$target_class))
+
+colnames(pro.train)<-c("target_class","Q.train")
+
+pro.train$Q.test<-pro.test$Freq
+
+pro.train$Porc.train<-pro.train$Q.train/sum(pro.train$Q.train)
+pro.train$Porc.test<-pro.train$Q.test/sum(pro.train$Q.test)
+
+DT::datatable(pro.train)%>%formatPercentage(c("Porc.train","Porc.test"),2)
+```
+
+
+```{r}
+objeto.recipe <- recipe(formula = target_class ~ `Mean of the integrated profile` + `Standard deviation of the integrated profile` + `Excess kurtosis of the integrated profile` + `Mean of the DM-SNR curve` + `Standard deviation of the DM-SNR curve` + `Excess kurtosis of the DM-SNR curve` + `Skewness of the DM-SNR curve`, data =  estrellas.train)
+objeto.recipe
+```
+```{r,warning=FALSE,message=FALSE}
+tmp<-estrellas%>% dplyr::select(`Mean of the integrated profile`, `Standard deviation of the integrated profile`, `Excess kurtosis of the integrated profile`, `Mean of the DM-SNR curve`, `Standard deviation of the DM-SNR curve`, `Excess kurtosis of the DM-SNR curve`, `Skewness of the DM-SNR curve`) %>%
+          nearZeroVar(saveMetrics = TRUE)
+
+DT::datatable(tmp)%>%formatPercentage("percentUnique",2)%>%formatRound("freqRatio",2)
+```
+```{r,warning=FALSE,message=FALSE}
+objeto.recipe <- objeto.recipe %>% step_nzv(all_predictors())
+objeto.recipe <- objeto.recipe %>% step_nzv(all_predictors())
+```
+
+```{r,warning=FALSE,message=FALSE}
+objeto.recipe <- objeto.recipe %>% step_center(all_numeric())
+objeto.recipe <- objeto.recipe %>% step_scale(all_numeric())
+```
+
+```{r,warning=FALSE,message=FALSE}
+objeto.recipe <- objeto.recipe %>% step_dummy(all_nominal(), -all_outcomes())
+trained.recipe <- prep(objeto.recipe, training = estrellas.train)
+```
+
+```{r,warning=FALSE,message=FALSE}
+trained.recipe
+```
+
+
+
+
+```{r,warning=FALSE,message=FALSE}
+training.set<-estrellas.train.prep <- bake(trained.recipe, new_data = estrellas.train)
+test.set<-estrellas.test.prep  <- bake(trained.recipe, new_data = estrellas.test)
+training.set<-as.data.frame(training.set)
+test.set<-as.data.frame(test.set)
+glimpse(estrellas.train.prep)
+```
+
+## 2. Seleccione el mejor núcleo para SVM ("linear","radial","polynomial","sigmoid"), para esto deben utilizar el siguiente código (Y es la variable a predecir):
+
+
+Probando los Nucleos, los que mejores indicadores marcaron fueron lineal y radial.
+
+Matriz de confusión para nucelo radial
+```{r,warning=FALSE,message=FALSE}
+clasificadorSVM  <- e1071::svm(estrellas.train$target_class ~ ., data = estrellas.train, type = 'C-classification', kernel = 'radial')
+```
+```{r,warning=FALSE,message=FALSE}
+pred.valid.svm <- predict(clasificadorSVM, newdata = estrellas.test)
+matrizConfusionSVM <- table(test.set$target_class, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+
+
+Nucleo lineal.
+```{r,warning=FALSE,message=FALSE}
+clasificadorSVM  <- e1071::svm(estrellas.train$target_class ~ ., data = estrellas.train, type = 'C-classification', kernel = 'linear')
+pred.valid.svm <- predict(clasificadorSVM, newdata = estrellas.test)
+
+```
+
+Matriz de confusión para nucelo lineal
+```{r,warning=FALSE,message=FALSE}
+matrizConfusionSVM <- table(test.set$target_class, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+```{r}
+predSVM <- prediction(as.numeric(pred.valid.svm), as.numeric(test.set$target_class))
+perfSVM <- performance(predSVM, "tpr", "fpr")
+plot(perfSVM)
+```
+
+```{r}
+auc.pSVM<-performance(predSVM,"auc")
+```
+
+
+Nucleo sigmoid
+```{r,warning=FALSE,message=FALSE}
+clasificadorSVM  <- e1071::svm(estrellas.train$target_class ~ ., data = estrellas.train, type = 'C-classification', kernel = 'sigmoid')
+pred.valid.svm <- predict(clasificadorSVM, newdata = estrellas.test)
+
+```
+
+Matriz de confusión para nucelo sigmoid
+```{r,warning=FALSE,message=FALSE}
+matrizConfusionSVM <- table(test.set$target_class, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+Nucleo polynomial
+```{r,warning=FALSE,message=FALSE}
+clasificadorSVM  <- e1071::svm(estrellas.train$target_class ~ ., data = estrellas.train, type = 'C-classification', kernel = 'polynomial')
+pred.valid.svm <- predict(clasificadorSVM, newdata = estrellas.test)
+
+```
+
+Matriz de confusión para nucelo polynomial
+```{r,warning=FALSE,message=FALSE}
+matrizConfusionSVM <- table(test.set$target_class, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+
+## 3. Entrene los demás modelos:
+
+### a. Bayes
+
+Naive Bayes Classifier
+```{r,warning=FALSE,message=FALSE}
+set.seed(1234)
+clasificadorBayes <- naiveBayes(target_class ~ ., data = estrellas.train)
+```
+Prediccion en el conjunto de validaciones.
+```{r,warning=FALSE,message=FALSE}
+pred.valid.bayes <- predict(clasificadorBayes, newdata = estrellas.test)
+```
+Matriz de confusión de Bayes.
+```{r,warning=FALSE,message=FALSE}
+matrizConfusionBayes <- table(estrellas.test$target_class, pred.valid.bayes)
+matrizConfusionBayes
+```
+
+```{r,warning=FALSE,message=FALSE}
+indicadores.calidad(matrizConfusionBayes)
+```
+
+Curva ROC para bayes.
+```{r,warning=FALSE,message=FALSE}
+predBayes <- prediction(as.numeric(pred.valid.bayes), as.numeric(test.set$target_class))
+perfBayes <- performance(predBayes, "tpr", "fpr")
+plot(perfBayes)
+```
+```{r,warning=FALSE,message=FALSE}
+auc.pBayes<-performance(predBayes,"auc")
+```
+
+
+### b. Árboles
+```{r,warning=FALSE,message=FALSE}
+set.seed(1234)
+clasificadorDT <- rpart(target_class ~ ., data = estrellas.train)
+```
+```{r,warning=FALSE,message=FALSE}
+pred.valid.DT <- predict(clasificadorDT, newdata = estrellas.test, type = 'class')
+```
+```{r,warning=FALSE,message=FALSE}
+matrizConfusionDT <- table(estrellas.test$target_class, pred.valid.DT)
+matrizConfusionDT
+```
+Indicadores de calidad para Arboles 
+```{r,warning=FALSE,message=FALSE}
+indicadores.calidad(matrizConfusionDT)
+```
+
+Curva ROC de arboles.
+```{r,warning=FALSE,message=FALSE}
+predDT <- prediction(as.numeric(pred.valid.DT), as.numeric(estrellas.test$target_class))
+perfDT <- performance(predDT, "tpr", "fpr")
+plot(perfDT)
+```
+```{r,warning=FALSE,message=FALSE}
+auc.pDT<-performance(predDT,"auc")
+print(auc.pDT)
+```
+
+
+### c. Bosques Aleatorios
+```{r,warning=FALSE,message=FALSE}
+names(estrellas.train) <- make.names(names(estrellas.train))
+names(estrellas.test) <- make.names(names(estrellas.test))
+clasificadorRF <- randomForest(target_class ~ ., data = estrellas.train, ntree = 250)
+```
+```{r,warning=FALSE,message=FALSE}
+ed.valid.RF <- predict(clasificadorRF, newdata = estrellas.test)
+pred.valid.RF <- predict(clasificadorRF, newdata = estrellas.test)
+```
+Matriz de confusión de Random Forest.
+```{r,warning=FALSE,message=FALSE}
+matrizConfusionRF <- table(estrellas.test$target_class, pred.valid.RF)
+matrizConfusionRF
+```
+Indicadores de calidad para random Forest 
+```{r,warning=FALSE,message=FALSE}
+indicadores.calidad(matrizConfusionRF)
+```
+Curva ROC para Random Forest
+```{r}
+predRF <- prediction(as.numeric(pred.valid.RF), as.numeric(estrellas.test$target_class))
+perfRF <- performance(predRF, "tpr", "fpr")
+plot(perfRF)
+```
+```{r,warning=FALSE,message=FALSE}
+auc.pRF<-performance(predRF,"auc")
+```
+
+### d. Regresión Logística
+```{r,warning=FALSE,message=FALSE}
+logistic_regression <- glm(target_class ~ ., family = binomial, data = estrellas.train)
+summary(logistic_regression)
+```
+```{r,warning=FALSE,message=FALSE}
+pred.train <- predict(logistic_regression, type = 'response', ndata = estrellas.train)
+pred.train <- ifelse(pred.train > 0.5, 1, 0)
+pred.train <- factor(pred.train, levels = c("0", "1"), labels = c("No pulsar", "pulsar"))
+```
+Matriz de confusión para regresión logística
+```{r,warning=FALSE,message=FALSE}
+matrizConfusionTRL <- table(estrellas.train$target_class, pred.train)
+matrizConfusionTRL
+```
+Aplicado al conjunto de pruebas
+```{r,warning=FALSE,message=FALSE}
+pred.valid <- predict(logistic_regression, type = 'response', newdata = estrellas.test)
+pred.valid <- ifelse(pred.valid > 0.5, 1, 0)
+pred.valid <- factor(pred.valid, levels = c("0", "1"), labels = c("No pulsar", "pulsar"))
+matrizConfusionPRL <- table(test.set$target_class, pred.valid)
+matrizConfusionPRL
+```
+Curva ROC para la regresión logística.
+
+```{r,warning=FALSE,message=FALSE}
+pred1 <- prediction(as.numeric(pred.valid), as.numeric(estrellas.test$target_class))
+perf1 <- performance(pred1, "tpr", "fpr")
+plot(perf1)
+```
+```{r,warning=FALSE,message=FALSE}
+auc.prl<-performance(pred1,"auc")
+```
+
+```{r,warning=FALSE,message=FALSE}
+indicadores.calidad(matrizConfusionPRL)
+```
+
+## 4. ¿Cuál modelo es mejor? Justifique su respuesta.
+```{r,warning=FALSE,message=FALSE}
+precision<-c((matrizConfusionTRL[1,1] + matrizConfusionTRL[2,2])/sum(matrizConfusionTRL),
+            (matrizConfusionBayes[1,1] + matrizConfusionBayes[2,2])/sum(matrizConfusionBayes),
+            (matrizConfusionDT[1,1] + matrizConfusionDT[2,2])/sum(matrizConfusionDT),
+            (matrizConfusionRF[1,1] + matrizConfusionRF[2,2])/sum(matrizConfusionRF),
+            (matrizConfusionSVM[1,1] + matrizConfusionSVM[2,2])/sum(matrizConfusionSVM)
+             )
+curva.ROC<-c(auc.prl@y.values[[1]],
+             auc.pBayes@y.values[[1]],
+             auc.pDT@y.values[[1]],
+             auc.pRF@y.values[[1]],
+             auc.pSVM@y.values[[1]])
+  
+resultados<-data.frame(
+  Precisión = precision,
+  Error = 1-precision,
+  ROC = curva.ROC
+)
+
+row.names(resultados)<-c("Regresión Logística","Bayes","Árboles","Bosques","Máquinas")
+
+DT:::datatable(resultados)%>% 
+            formatPercentage(colnames(resultados),2)
+```
+
+
+## 5. Realice 20 veces la calibración de estos modelos (utilizar el código visto en clases)
+
+```{r,warning=FALSE,message=FALSE}
+num.iter<-20
+promedio_error_logistica <- 0 
+promedio_error_randomForest <- 0
+promedio_error_arboles <- 0
+promedio_error_bayes <- 0
+
+vector_log <- c()
+vector_randomForest <- c()
+vector_arboles <- c()
+vector_bayes <- c()
+
+Error.df<-data.frame(Modelo = c() , Iteracion = c() , Error = c())
+N<-dim(estrellas)[1]
+muestra.tam<-floor(dim(estrellas)[1]*0.8)
+for(i in 1:num.iter)
+{
+  set.seed(set.seed(1234))
+  muestra <- sample(1:N,size = muestra.tam)
+  estrellas.train <- estrellas[muestra,-c(1,4,8) ]
+  estrellas.test  <- estrellas[-muestra, -c(1,4,8)]
+  
+  ##Logistico
+  names(estrellas.train) <- make.names(names(estrellas.train))
+  names(estrellas.test) <- make.names(names(estrellas.test))
+  
+  RL <- glm(target_class ~ ., family = binomial, data = estrellas.train)
+  pred.valid <- predict(RL, type = 'response', newdata = estrellas.test)
+  pred.valid <- ifelse(pred.valid > 0.5, 1, 0)
+  pred.valid <- factor(pred.valid, levels = c("0", "1"), labels = c("No pulsar", "Pulsar"))
+  matrizConfusionPRL <- table(estrellas.test$target_class, pred.valid)
+  tmp.ind.log<-indicadores.calidad(matrizConfusionPRL)
+
+  tmp.df<-data.frame(Modelo = "Regresión Logística", Iteracion = i,Error = tmp.ind.log$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_logistica = promedio_error_logistica + tmp.ind.log$Error.Global
+  
+  vector_log <- c(vector_log, tmp.ind.log$Error.Global)
+  
+  ##Random forest
+  clasificadorRF <- randomForest(target_class ~ ., data = estrellas.train, ntree = 250)
+  pred.valid.RF <- predict(clasificadorRF, newdata = estrellas.test)
+  matrizConfusionRF <- table(estrellas.test$target_class, pred.valid.RF)
+  tmp.ind.forest <- indicadores.calidad(matrizConfusionRF)
+  
+  tmp.df<-data.frame(Modelo = "Random Forest", Iteracion = i,Error = tmp.ind.forest$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_randomForest <- promedio_error_randomForest + tmp.ind.forest$Error.Global
+  
+  vector_randomForest <- c(vector_randomForest, tmp.ind.forest$Error.Global)
+  
+  #Arboles de decision
+  clasificadorDT <- rpart(target_class ~ ., data = estrellas.train)
+  pred.valid.DT <- predict(clasificadorDT, newdata = estrellas.test, type = 'class')
+  matrizConfusionDT <- table(estrellas.test$target_class, pred.valid.DT)
+  tmp.ind.dthree <- indicadores.calidad(matrizConfusionDT)
+  
+  tmp.df<-data.frame(Modelo = "Decision Tree", Iteracion = i,Error = tmp.ind.dthree$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_arboles <- promedio_error_arboles + tmp.ind.dthree$Error.Global
+  
+  vector_arboles <- c(vector_arboles,tmp.ind.dthree$Error.Global) 
+  
+  #Bayes
+  clasificadorBayes <- naiveBayes(target_class ~ ., data = estrellas.train)
+  pred.valid.bayes <- predict(clasificadorBayes, newdata = estrellas.test)
+  matrizConfusionBayes <- table(estrellas.test$target_class, pred.valid.bayes)
+  tmp.ind.bayes <- indicadores.calidad(matrizConfusionBayes)
+  
+  sd(tmp.ind.bayes$Error.Global)
+  
+  tmp.df<-data.frame(Modelo = "Bayes", Iteracion = i,Error = tmp.ind.bayes$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_bayes <- promedio_error_bayes + tmp.ind.bayes$Error.Global
+  
+  vector_bayes <- c(vector_bayes,tmp.ind.bayes$Error.Global)
+  
+}
+
+p<-ggplot(Error.df, aes(x=Iteracion, y=Error, group=Modelo)) +
+  geom_line(aes(color=Modelo))+
+  geom_point(aes(color=Modelo))
+p
+
+```
+
+### a. Calcule el promedio de error
+```{r,warning=FALSE,message=FALSE}
+print(paste0("Promedio de error regresión lógistica: ", promedio_error_logistica/20))
+print(paste0("Promedio de error regresión Random Forest: ", promedio_error_randomForest/20))
+print(paste0("Promedio de error regresión Arboles de Decision: ", promedio_error_arboles/20))
+print(paste0("Promedio de error regresión Bayes: ", promedio_error_bayes/20))
+```
+
+### b. Calcule la desviación estándar
+
+```{r}
+print(paste0("La desviación estandar de error regresión lógistica: ", sd(x=vector_log)))
+print(paste0("La desviación estandar de error Random Forest: ", sd(x=vector_randomForest)))
+print(paste0("La desviación estandar de error Arboles de decisión: ", sd(x=vector_arboles)))
+print(paste0("La desviación estandar de error Bayes: ", sd(x=vector_bayes)))
+
+```
+### c. ¿Cuál modelo es mejor? Justifique su respuesta
+El modelo que mejor califica está entre el Random Forest y el logístico, teniendo en cuenta dos parámetros de suma importancia. En primer lugar, la precisión, donde el logístico cuenta una precisión de 97.97% y el de Bosques es de 97.96%, siendo estos dos los más precisos. En error los separa una décimal, donde el logístico tiene un error de 2.03%	y el de bosques 2.04%. Sin embargo, como vimos anteriormente, en promedio de error con la calibración (20 iteraciones) es menor. Por lo tanto, el mejor modelo es el Random Forest.
+
+### d. El modelo seleccionado en el punto 3 es el mismo que en el punto 4.
+Si, es el mismo.
+
+
+# Ejercicio 2 (35 puntos).
+
+```{r}
+library(mlbench)
+data(PimaIndiansDiabetes2)
+```
+
+```{r}
+DT::datatable(PimaIndiansDiabetes2)
+```
+NA -> 0
+```{r}
+PimaIndiansDiabetes2[is.na(PimaIndiansDiabetes2)] <- 0
+map_dbl(PimaIndiansDiabetes2, .f = function(x){sum(is.na(x))})
+```
+
+
+```{r}
+PimaIndiansDiabetes2$diabetes <- as.factor(PimaIndiansDiabetes2$diabetes)
+```
+Distribución de la variable respuesta.
+```{r}
+ggplot(data = PimaIndiansDiabetes2, aes(x = diabetes, y = ..count.., fill = diabetes )) +
+  geom_bar() +
+  scale_fill_manual(values = c("magenta", "blue")) +
+  labs(title = "Target Class") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+Cantidad en porcentajes
+```{r}
+tmp<-table(PimaIndiansDiabetes2$diabetes)
+df<-as.data.frame(tmp)
+colnames(df)<-c("class","Cantidad")
+df$Porcentaje<-df$Cantidad/sum(df$Cantidad)
+DT:::datatable(df)%>%formatPercentage("Porcentaje",2)
+```
+Se valida que el porcentaje de acierto sea superior a lo esperado por azar.
+
+```{r}
+p2 <- ggplot(data = PimaIndiansDiabetes2, aes(x = glucose, y = diabetes, color = diabetes)) +
+      geom_boxplot(outlier.shape = NA) +
+      geom_jitter(alpha = 0.3, width = 0.15) +
+      scale_color_manual(values = c("magenta", "blue")) +
+      theme_bw()
+final.plot <- ggarrange(p2, legend = "top")
+final.plot <- annotate_figure(final.plot, top = text_grob("diabetes", size = 15))
+final.plot
+```
+```{r}
+p2 <- ggplot(data = PimaIndiansDiabetes2, aes(x = insulin, y = diabetes, color = diabetes)) +
+      geom_boxplot(outlier.shape = NA) +
+      geom_jitter(alpha = 0.3, width = 0.15) +
+      scale_color_manual(values = c("magenta", "blue")) +
+      theme_bw()
+final.plot <- ggarrange(p2, legend = "top")
+final.plot <- annotate_figure(final.plot, top = text_grob("diabetes", size = 15))
+final.plot
+```
+
+
+
+
+```{r}
+chart.Correlation(PimaIndiansDiabetes2[,1:8], histogram = TRUE, method = "pearson")
+```
+Realice lo siguiente:
+
+## 1. Cree dos datasets:
+a. 80% de los datos para training
+b. 20% para testing
+
+```{r}
+set.seed(123)
+# Se crean los índices de las observaciones de entrenamiento
+train <- createDataPartition(y = PimaIndiansDiabetes2$diabetes, p = 0.8, list = FALSE, times = 1)
+PimaIndiansDiabetes2.train <- PimaIndiansDiabetes2[train, ]
+PimaIndiansDiabetes2.test  <- PimaIndiansDiabetes2[-train, ]
+```
+
+```{r}
+pro.train<-as.data.frame(table(PimaIndiansDiabetes2.train$diabetes))
+pro.test<-as.data.frame(table(PimaIndiansDiabetes2.test$diabetes))
+
+colnames(pro.train)<-c("diabetes","Q.train")
+
+pro.train$Q.test<-pro.test$Freq
+
+pro.train$Porc.train<-pro.train$Q.train/sum(pro.train$Q.train)
+pro.train$Porc.test<-pro.train$Q.test/sum(pro.train$Q.test)
+
+DT::datatable(pro.train)%>%formatPercentage(c("Porc.train","Porc.test"),2)
+```
+```{r}
+objeto.recipe <- recipe(formula = diabetes ~ pregnant + glucose + pressure + triceps + insulin + mass + pedigree + age, data =  PimaIndiansDiabetes2.train)
+objeto.recipe
+```
+
+```{r}
+tmp<-PimaIndiansDiabetes2%>% dplyr::select(pregnant, glucose, pressure, triceps, insulin, mass, pedigree, age) %>%
+          nearZeroVar(saveMetrics = TRUE)
+
+DT::datatable(tmp)%>%formatPercentage("percentUnique",2)%>%formatRound("freqRatio",2)
+```
+
+```{r}
+objeto.recipe <- objeto.recipe %>% step_nzv(all_predictors())
+objeto.recipe <- objeto.recipe %>% step_nzv(all_predictors())
+objeto.recipe <- objeto.recipe %>% step_center(all_numeric())
+objeto.recipe <- objeto.recipe %>% step_scale(all_numeric())
+objeto.recipe <- objeto.recipe %>% step_dummy(all_nominal(), -all_outcomes())
+trained.recipe <- prep(objeto.recipe, training = PimaIndiansDiabetes2.train)
+```
+
+```{r}
+training.set<-PimaIndiansDiabetes2.train.prep <- bake(trained.recipe, new_data = PimaIndiansDiabetes2.train)
+test.set<-PimaIndiansDiabetes2.test.prep  <- bake(trained.recipe, new_data = PimaIndiansDiabetes2.test)
+training.set<-as.data.frame(training.set)
+test.set<-as.data.frame(test.set)
+glimpse(PimaIndiansDiabetes2.train.prep)
+```
+
+## 2. Seleccione el mejor núcleo para SVM (“linear”,“radial”,“polynomial”,“sigmoid”), para esto deben utilizar el siguiente código (Y es la variable a predecir):
+
+Radial
+```{r}
+clasificadorSVM  <- e1071::svm(PimaIndiansDiabetes2.train$diabetes ~ ., data = PimaIndiansDiabetes2.train, type = 'C-classification', kernel = 'radial')
+pred.valid.svm <- predict(clasificadorSVM, newdata = PimaIndiansDiabetes2.test)
+```
+
+Matriz de confusión para SVM Radial
+```{r}
+matrizConfusionSVM <- table(test.set$diabetes, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+Lineal
+```{r}
+clasificadorSVM  <- e1071::svm(PimaIndiansDiabetes2.train$diabetes ~ ., data = PimaIndiansDiabetes2.train, type = 'C-classification', kernel = 'linear')
+pred.valid.svm <- predict(clasificadorSVM, newdata = PimaIndiansDiabetes2.test)
+```
+
+Matriz de confusión para SVM Lineal
+```{r}
+matrizConfusionSVM <- table(test.set$diabetes, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+polynomial
+```{r}
+clasificadorSVM  <- e1071::svm(PimaIndiansDiabetes2.train$diabetes ~ ., data = PimaIndiansDiabetes2.train, type = 'C-classification', kernel = 'polynomial')
+pred.valid.svm <- predict(clasificadorSVM, newdata = PimaIndiansDiabetes2.test)
+```
+
+Matriz de confusión para SVM polynomial
+```{r}
+matrizConfusionSVM <- table(test.set$diabetes, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+sigmoid
+```{r}
+clasificadorSVM  <- e1071::svm(PimaIndiansDiabetes2.train$diabetes ~ ., data = PimaIndiansDiabetes2.train, type = 'C-classification', kernel = 'sigmoid')
+pred.valid.svm <- predict(clasificadorSVM, newdata = PimaIndiansDiabetes2.test)
+```
+
+Matriz de confusión para SVM sigmoid
+```{r}
+matrizConfusionSVM <- table(test.set$diabetes, pred.valid.svm)
+matrizConfusionSVM
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+
+En este caso la que mejor califica es el lineal. 
+
+## 3. Entrene los demás modelos:
+
+### a. Bayes
+
+```{r}
+set.seed(1234)
+clasificadorBayes <- naiveBayes(diabetes ~ ., data = PimaIndiansDiabetes2.train)
+```
+Prediccion en el conjunto de validaciones.
+```{r}
+pred.valid.bayes <- predict(clasificadorBayes, newdata = PimaIndiansDiabetes2.test)
+```
+
+Matriz de confusión de Bayes.
+
+```{r}
+matrizConfusionBayes <- table(PimaIndiansDiabetes2.test$diabetes, pred.valid.bayes)
+matrizConfusionBayes
+```
+```{r}
+indicadores.calidad(matrizConfusionBayes)
+```
+Curva ROC para bayes
+
+```{r}
+predBayes <- prediction(as.numeric(pred.valid.bayes), as.numeric(test.set$diabetes))
+perfBayes <- performance(predBayes, "tpr", "fpr")
+plot(perfBayes)
+```
+
+### b. Arboles
+
+```{r}
+set.seed(1234)
+clasificadorDT <- rpart(diabetes ~ ., data = PimaIndiansDiabetes2.train)
+pred.valid.DT <- predict(clasificadorDT, newdata = PimaIndiansDiabetes2.test, type = 'class')
+matrizConfusionDT <- table(PimaIndiansDiabetes2.test$diabetes, pred.valid.DT)
+matrizConfusionDT
+```
+Indicadores de calidad para Arboles
+
+```{r}
+indicadores.calidad(matrizConfusionDT)
+```
+
+Curva ROC para arboles
+
+```{r}
+predDT <- prediction(as.numeric(pred.valid.DT), as.numeric(PimaIndiansDiabetes2.test$diabetes))
+perfDT <- performance(predDT, "tpr", "fpr")
+plot(perfDT)
+```
+
+## c. Bosques Aleatorios
+
+```{r}
+names(PimaIndiansDiabetes2.train) <- make.names(names(PimaIndiansDiabetes2.train))
+names(PimaIndiansDiabetes2.test) <- make.names(names(PimaIndiansDiabetes2.test))
+clasificadorRF <- randomForest(diabetes ~ ., data = PimaIndiansDiabetes2.train, ntree = 250)
+ed.valid.RF <- predict(clasificadorRF, newdata = PimaIndiansDiabetes2.test)
+pred.valid.RF <- predict(clasificadorRF, newdata = PimaIndiansDiabetes2.test)
+```
+
+Matriz de confusión de Random Forest.
+
+```{r}
+matrizConfusionRF <- table(PimaIndiansDiabetes2.test$diabetes, pred.valid.RF)
+matrizConfusionRF
+```
+Indicadores de calidad para random Forest
+
+```{r}
+indicadores.calidad(matrizConfusionRF)
+```
+
+Curva ROC para Random Forest
+
+```{r}
+predRF <- prediction(as.numeric(pred.valid.RF), as.numeric(PimaIndiansDiabetes2.test$diabetes))
+perfRF <- performance(predRF, "tpr", "fpr")
+plot(perfRF)
+```
+
+## d. Regresión Logística
+
+```{r}
+logistic_regression <- glm(diabetes ~ ., family = binomial, data = PimaIndiansDiabetes2.train)
+summary(logistic_regression)
+```
+```{r}
+pred.train <- predict(logistic_regression, type = 'response', ndata = PimaIndiansDiabetes2.train)
+pred.train <- ifelse(pred.train > 0.5, 1, 0)
+#PimaIndiansDiabetes2$diabetes<-ifelse(PimaIndiansDiabetes2$diabetes=="pos",1,0)
+pred.train <- factor(pred.train, levels = c("1", "0"), labels = c("positivo", "negativo"))
+```
+
+Matriz de confusión para regresión logística
+
+```{r}
+matrizConfusionTRL <- table(PimaIndiansDiabetes2.train$diabetes, pred.train)
+matrizConfusionTRL
+```
+
+```{r}
+indicadores.calidad(matrizConfusionPRL)
+```
+
+## 4. ¿Cuál es el mejor modelo? Justifica su respuesta.
+
+```{r}
+precision<-c((matrizConfusionTRL[1,1] + matrizConfusionTRL[2,2])/sum(matrizConfusionTRL),
+            (matrizConfusionBayes[1,1] + matrizConfusionBayes[2,2])/sum(matrizConfusionBayes),
+            (matrizConfusionDT[1,1] + matrizConfusionDT[2,2])/sum(matrizConfusionDT),
+            (matrizConfusionRF[1,1] + matrizConfusionRF[2,2])/sum(matrizConfusionRF),
+            (matrizConfusionSVM[1,1] + matrizConfusionSVM[2,2])/sum(matrizConfusionSVM)
+             )
+curva.ROC<-c(auc.prl@y.values[[1]],
+             auc.pBayes@y.values[[1]],
+             auc.pDT@y.values[[1]],
+             auc.pRF@y.values[[1]],
+             auc.pSVM@y.values[[1]])
+  
+resultados<-data.frame(
+  Precisión = precision,
+  Error = 1-precision,
+  ROC = curva.ROC
+)
+
+row.names(resultados)<-c("Regresión Logística","Bayes","Árboles","Bosques","Máquinas")
+
+DT:::datatable(resultados)%>% 
+            formatPercentage(colnames(resultados),2)
+```
+En este análisis, el algoritmo de Bayes es el que mejores indicadores tiene. Tanto en precisión global como en error.
+
+
+## 5. Realice 20 veces la calibración de estos modelos (utilizar el código visto en clases)
+
+```{r}
+num.iter<-20
+promedio_error_logistica <- 0 
+promedio_error_randomForest <- 0
+promedio_error_arboles <- 0
+promedio_error_bayes <- 0
+
+vector_log <- c()
+vector_randomForest <- c()
+vector_arboles <- c()
+vector_bayes <- c()
+
+Error.df<-data.frame(Modelo = c() , Iteracion = c() , Error = c())
+N<-dim(PimaIndiansDiabetes2)[1]
+muestra.tam<-floor(dim(PimaIndiansDiabetes2)[1]*0.8)
+for(i in 1:num.iter)
+{
+  set.seed(set.seed(1234))
+  muestra <- sample(1:N,size = muestra.tam)
+  PimaIndiansDiabetes2.train <- PimaIndiansDiabetes2[muestra,-c(1,4,8) ]
+  PimaIndiansDiabetes2.test  <- PimaIndiansDiabetes2[-muestra, -c(1,4,8)]
+  
+  ##Logistico
+  names(PimaIndiansDiabetes2.train) <- make.names(names(PimaIndiansDiabetes2.train))
+  names(PimaIndiansDiabetes2.test) <- make.names(names(PimaIndiansDiabetes2.test))
+  
+  RL <- glm(diabetes ~ ., family = binomial, data = PimaIndiansDiabetes2.train)
+  pred.valid <- predict(RL, type = 'response', newdata = PimaIndiansDiabetes2.test)
+  pred.valid <- ifelse(pred.valid > 0.5, 1, 0)
+  pred.valid <- factor(pred.valid, levels = c("0", "1"), labels = c("No pulsar", "Pulsar"))
+  matrizConfusionPRL <- table(PimaIndiansDiabetes2.test$diabetes, pred.valid)
+  tmp.ind.log<-indicadores.calidad(matrizConfusionPRL)
+
+  tmp.df<-data.frame(Modelo = "Regresión Logística", Iteracion = i,Error = tmp.ind.log$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_logistica = promedio_error_logistica + tmp.ind.log$Error.Global
+  
+  vector_log <- c(vector_log, tmp.ind.log$Error.Global)
+  
+  ##Random forest
+  clasificadorRF <- randomForest(diabetes ~ ., data = PimaIndiansDiabetes2.train, ntree = 250)
+  pred.valid.RF <- predict(clasificadorRF, newdata = PimaIndiansDiabetes2.test)
+  matrizConfusionRF <- table(PimaIndiansDiabetes2.test$diabetes, pred.valid.RF)
+  tmp.ind.forest <- indicadores.calidad(matrizConfusionRF)
+  
+  tmp.df<-data.frame(Modelo = "Random Forest", Iteracion = i,Error = tmp.ind.forest$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_randomForest <- promedio_error_randomForest + tmp.ind.forest$Error.Global
+  
+  vector_randomForest <- c(vector_randomForest, tmp.ind.forest$Error.Global)
+  
+  #Arboles de decision
+  clasificadorDT <- rpart(diabetes ~ ., data = PimaIndiansDiabetes2.train)
+  pred.valid.DT <- predict(clasificadorDT, newdata = PimaIndiansDiabetes2.test, type = 'class')
+  matrizConfusionDT <- table(PimaIndiansDiabetes2.test$diabetes, pred.valid.DT)
+  tmp.ind.dthree <- indicadores.calidad(matrizConfusionDT)
+  
+  tmp.df<-data.frame(Modelo = "Decision Tree", Iteracion = i,Error = tmp.ind.dthree$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_arboles <- promedio_error_arboles + tmp.ind.dthree$Error.Global
+  
+  vector_arboles <- c(vector_arboles,tmp.ind.dthree$Error.Global) 
+  
+  #Bayes
+  clasificadorBayes <- naiveBayes(diabetes ~ ., data = PimaIndiansDiabetes2.train)
+  pred.valid.bayes <- predict(clasificadorBayes, newdata = PimaIndiansDiabetes2.test)
+  matrizConfusionBayes <- table(PimaIndiansDiabetes2.test$diabetes, pred.valid.bayes)
+  tmp.ind.bayes <- indicadores.calidad(matrizConfusionBayes)
+  
+  sd(tmp.ind.bayes$Error.Global)
+  
+  tmp.df<-data.frame(Modelo = "Bayes", Iteracion = i,Error = tmp.ind.bayes$Error.Global)
+  Error.df<-rbind(Error.df,tmp.df)
+  
+  promedio_error_bayes <- promedio_error_bayes + tmp.ind.bayes$Error.Global
+  
+  vector_bayes <- c(vector_bayes,tmp.ind.bayes$Error.Global)
+  
+}
+
+p<-ggplot(Error.df, aes(x=Iteracion, y=Error, group=Modelo)) +
+  geom_line(aes(color=Modelo))+
+  geom_point(aes(color=Modelo))
+p
+```
+### a. Calcule el promedio de error
+
+```{r,warning=FALSE,message=FALSE}
+print(paste0("Promedio de error regresión lógistica: ", promedio_error_logistica/20))
+print(paste0("Promedio de error regresión Random Forest: ", promedio_error_randomForest/20))
+print(paste0("Promedio de error regresión Arboles de Decision: ", promedio_error_arboles/20))
+print(paste0("Promedio de error regresión Bayes: ", promedio_error_bayes/20))
+```
+
+### b. Calcule la desviación estándar
+
+```{r}
+print(paste0("La desviación estandar de error regresión lógistica: ", sd(x=vector_log)))
+print(paste0("La desviación estandar de error Random Forest: ", sd(x=vector_randomForest)))
+print(paste0("La desviación estandar de error Arboles de decisión: ", sd(x=vector_arboles)))
+print(paste0("La desviación estandar de error Bayes: ", sd(x=vector_bayes)))
+
+```
+
+### c. ¿Cuál modelo es mejor? Justifique su respuesta
+El modelo que mejor califica es Bayes, teniendo un mejor comportamiento promedio de error, además de que se ve que tras 10 entrenamientos el modelo tienda a disminuir su error. Parece que el modelo clasifica bien y los indicadores de calidad lo sustentn.
+
+d. El modelo seleccionado en el punto 3 es el mismo que en el punto 4.
+Realmente no, creí que podría ser el Random Forest. Sin embargo, traslapando los entrenamientos con los indicadores, considero que es mejor Bayes. 
+
+
+# Ejercicio 3 (30 puntos)
+
+```{r}
+datos <- titanic::titanic_train
+DT::datatable(datos[1:10,])
+```
+```{r}
+datos$Survived <- if_else(datos$Survived == 1, "Si", "No")
+datos$Survived <- as.factor(datos$Survived)
+```
+```{r}
+datos$Pclass <- as.factor(datos$Pclass)
+datos$SibSp <- as.factor(datos$SibSp)
+datos$Parch <- as.factor(datos$Parch)
+datos$Sex      <- as.factor(datos$Sex)
+datos$Embarked <- as.factor(datos$Embarked)
+datos$Cabin[datos$Cabin == ""] <- NA
+```
+
+```{r}
+datos$Embarked <- as.character(datos$Embarked)
+datos$Embarked[datos$Embarked == ""] <- NA
+datos$Embarked <- as.factor(datos$Embarked)
+indx.ind<-c(which(is.na(datos$Fare)),which(is.na(datos$Embarked)))
+datos<-datos[-indx.ind,]
+
+indx.edad.na<-which(is.na(datos$Age))
+datos<-datos[-indx.edad.na,]
+```
+
+```{r}
+tmp<-table(datos$Survived)
+df<-as.data.frame(tmp)
+colnames(df)<-c("Survived","Cantidad")
+df$Porcentaje<-df$Cantidad/sum(df$Cantidad)
+DT:::datatable(df)%>%formatPercentage("Porcentaje",2)
+```
+```{r}
+n.observaciones <- nrow(datos)
+predicciones <- rep(x = "No",  n.observaciones)
+mean(predicciones == datos$Survived) * 100
+```
+
+```{r}
+test <- ks.test(
+        x = datos %>% filter(Survived == "Si") %>% pull(Age),
+        y = datos %>% filter(Survived == "No") %>% pull(Age)
+      )
+```
+```{r}
+test <- ks.test(
+        x = datos %>% filter(Survived == "Si") %>% filter(Age <= 10) %>% pull(Age),
+        y = datos %>% filter(Survived == "No") %>% filter(Age <= 10) %>% pull(Age)
+      )
+```
+```{r}
+datos <- datos %>%
+         mutate(Age.grupo = case_when(Age <= 10  ~ "niño",
+                                      Age > 10 & Age <= 18 ~ "adolescente",
+                                      Age > 18 & Age <= 60  ~ "adulto",
+                                      Age > 60 ~ "anciano"))
+datos$Age.grupo <- as.factor(datos$Age.grupo)
+```
+
+```{r}
+datos %>% filter(!is.na(Fare)) %>% group_by(Survived) %>%
+          summarise(media = mean(Fare),
+                    mediana = median(Fare),
+                    min = min(Fare),
+                    max = max(Fare))
+```
+
+```{r}
+datos.cualitativos <- datos %>% dplyr::select( -Age, -Fare, -Name, -Ticket, -Cabin, -PassengerId)
+
+datos.cualitativos.tidy <- datos.cualitativos %>%
+                           gather(key = "variable", value = "grupo",-Survived)
+```
+```{r}
+datos.cualitativos.tidy <- datos.cualitativos.tidy %>% filter(!is.na(grupo))
+  
+datos.cualitativos.tidy <- datos.cualitativos.tidy %>%
+                           mutate(variable_grupo = paste(variable, grupo, sep = "_"))
+
+test.proporcion <- function(df){
+  n.supervivientes <- sum(df$Survived == "Si") 
+  n.fallecidos     <- sum(df$Survived == "No")
+  n.total <- n.supervivientes + n.fallecidos
+  test <- prop.test(x = n.supervivientes, n = n.total, p = 0.4)
+  prop.supervivientes <- n.supervivientes / n.total
+  return(data.frame(p.value = test$p.value, prop.supervivientes))
+}
+
+analisis.prop <- datos.cualitativos.tidy %>%
+                 group_by(variable_grupo) %>%
+                 nest() %>%
+                 arrange(variable_grupo) %>%
+                 mutate(prop_test = purrr::map(.x = data, .f = test.proporcion)) %>%
+                 unnest(prop_test) %>%
+                 arrange(p.value) %>% 
+                 dplyr::select(variable_grupo,p.value, prop.supervivientes)
+```
+```{r}
+DT::datatable(analisis.prop)
+```
+
+
+## 1. Cree dos datasets:
+a. 80% de los datos para training
+b. 20% para testing
+
+```{r}
+set.seed(123)
+datos$SibSp<-as.character(datos$SibSp)
+datos$SibSp<-as.factor(datos$SibSp)
+
+datos$Parch<-as.character(datos$Parch)
+datos$Parch<-as.factor(datos$Parch)
+ 
+# Se crean los índices de las observaciones de entrenamiento
+train <- createDataPartition(y = datos$Survived, p = 0.8, list = FALSE, times = 1)
+datos.train <- datos[train, ]
+datos.test  <- datos[-train, ]
+```
+
+```{r}
+pro.train<-as.data.frame(table(datos.train$Survived))
+pro.test<-as.data.frame(table(datos.test$Survived))
+
+colnames(pro.train)<-c("Survived","Q.train")
+
+pro.train$Q.test<-pro.test$Freq
+
+pro.train$Porc.train<-pro.train$Q.train/sum(pro.train$Q.train)
+pro.train$Porc.test<-pro.train$Q.test/sum(pro.train$Q.test)
+
+DT::datatable(pro.train)%>%formatPercentage(c("Porc.train","Porc.test"),2)
+```
+```{r}
+objeto.recipe <- recipe(formula = Survived ~ Pclass + Sex + SibSp + Parch +
+                                  Fare + Embarked + Age.grupo,
+                        data =  datos.train)
+objeto.recipe
+```
+
+```{r}
+tmp<-datos %>% dplyr::select(Pclass, Sex, SibSp, Parch, Fare, Embarked, Age.grupo) %>%
+          nearZeroVar(saveMetrics = TRUE)
+
+DT::datatable(tmp)%>%formatPercentage("percentUnique",2)%>%formatRound("freqRatio",2)
+```
+
+```{r}
+objeto.recipe <- objeto.recipe %>% step_nzv(all_predictors())
+objeto.recipe <- objeto.recipe %>% step_nzv(all_predictors())
+objeto.recipe <- objeto.recipe %>% step_center(all_numeric())
+objeto.recipe <- objeto.recipe %>% step_scale(all_numeric())
+objeto.recipe <- objeto.recipe %>% step_dummy(all_nominal(), -all_outcomes())
+trained.recipe <- prep(objeto.recipe, training = datos.train)
+trained.recipe
+```
+
+```{r}
+training.set<-datos.train.prep <- bake(trained.recipe, new_data = datos.train)
+test.set<-datos.test.prep  <- bake(trained.recipe, new_data = datos.test)
+training.set<-as.data.frame(training.set)
+test.set<-as.data.frame(test.set)
+glimpse(datos.train.prep)
+```
+
+```{r}
+datos.train<-datos.train[,-c(1,4,9,11)]
+datos.test<-datos.test[,-c(1,4,9,11)]
+```
+
+## 2. Seleccione el mejor núcleo (kernel) para SVM ("linear","radial","polynomial","sigmoid"),
+para esto deben utilizar el siguiente código (Y es la variable a predecir):
+
+Radial
+```{r}
+set.seed(1234)
+clasificadorSVM <- e1071::svm(Survived ~ ., data = datos.train, 
+                       type = 'C-classification', kernel = 'radial')
+```
+```{r}
+pred.valid.svm <- predict(clasificadorSVM, newdata = datos.test)
+matrizConfusionSVM <- table(test.set$Survived, pred.valid.svm)
+matrizConfusionSVM
+```
+Curva ROC de Nucleo Radial
+```{r}
+predSVM <- prediction(as.numeric(pred.valid.svm), as.numeric(test.set$Survived))
+perfSVM <- performance(predSVM, "tpr", "fpr")
+plot(perfSVM)
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+
+Lineal
+```{r}
+set.seed(1234)
+clasificadorSVM <- e1071::svm(Survived ~ ., data = datos.train, 
+                       type = 'C-classification', kernel = 'linear')
+```
+```{r}
+pred.valid.svm <- predict(clasificadorSVM, newdata = datos.test)
+matrizConfusionSVM <- table(test.set$Survived, pred.valid.svm)
+matrizConfusionSVM
+```
+Curva ROC de Nucleo Radial
+```{r}
+predSVM <- prediction(as.numeric(pred.valid.svm), as.numeric(test.set$Survived))
+perfSVM <- performance(predSVM, "tpr", "fpr")
+plot(perfSVM)
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+
+polynomial
+```{r}
+set.seed(1234)
+clasificadorSVM <- e1071::svm(Survived ~ ., data = datos.train, 
+                       type = 'C-classification', kernel = 'polynomial')
+```
+```{r}
+pred.valid.svm <- predict(clasificadorSVM, newdata = datos.test)
+matrizConfusionSVM <- table(test.set$Survived, pred.valid.svm)
+matrizConfusionSVM
+```
+Curva ROC de Nucleo Radial
+```{r}
+predSVM <- prediction(as.numeric(pred.valid.svm), as.numeric(test.set$Survived))
+perfSVM <- performance(predSVM, "tpr", "fpr")
+plot(perfSVM)
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+
+sigmoid
+```{r}
+set.seed(1234)
+clasificadorSVM <- e1071::svm(Survived ~ ., data = datos.train, 
+                       type = 'C-classification', kernel = 'sigmoid')
+```
+```{r}
+pred.valid.svm <- predict(clasificadorSVM, newdata = datos.test)
+matrizConfusionSVM <- table(test.set$Survived, pred.valid.svm)
+matrizConfusionSVM
+```
+Curva ROC de Nucleo sigmoid
+```{r}
+predSVM <- prediction(as.numeric(pred.valid.svm), as.numeric(test.set$Survived))
+perfSVM <- performance(predSVM, "tpr", "fpr")
+plot(perfSVM)
+```
+```{r}
+indicadores.calidad(matrizConfusionSVM)
+```
+
+En este caso el mejor nucleo es el sigmoide.
+
+## 3. Entrene los demás modelos:
+a. Bayes
+```{r}
+set.seed(1234)
+clasificadorBayes <- naiveBayes(Survived ~ ., data = datos.train)
+pred.valid.bayes <- predict(clasificadorBayes, newdata = datos.test)
+matrizConfusionBayes <- table(datos.test$Survived, pred.valid.bayes)
+matrizConfusionBayes
+```
+Indicadores de calidad
+```{r}
+indicadores.calidad(matrizConfusionBayes)
+```
+
+
+Curva ROC de Bayes.
+
+```{r}
+predBayes <- prediction(as.numeric(pred.valid.bayes), as.numeric(test.set$Survived))
+perfBayes <- performance(predBayes, "tpr", "fpr")
+plot(perfBayes)
+```
+
+b. Árboles
+```{r}
+set.seed(1234)
+clasificadorDT <- rpart(Survived ~ ., data = datos.train)
+pred.valid.DT <- predict(clasificadorDT, newdata = datos.test, type = 'class')
+matrizConfusionDT <- table(datos.test$Survived, pred.valid.DT)
+```
+Indicadores de Calidad de arboles
+```{r}
+indicadores.calidad(matrizConfusionDT)
+```
+Curva ROC de arboles
+```{r}
+predDT <- prediction(as.numeric(pred.valid.DT), as.numeric(datos.test$Survived))
+perfDT <- performance(predDT, "tpr", "fpr")
+plot(perfDT)
+```
+
+c. Bosques Aleatorios
+```{r}
+clasificadorRF <- randomForest(Survived ~ ., data = datos.train, ntree = 250)
+```
+```{r}
+pred.valid.RF <- predict(clasificadorRF, newdata = datos.test)
+matrizConfusionRF <- table(datos.test$Survived, pred.valid.RF)
+matrizConfusionRF
+```
+Indicadores de Calidad de Random Forest
+```{r}
+indicadores.calidad(matrizConfusionRF)
+```
+
+d. Regresión Logística
+
+```{r}
+RL <- glm(Survived ~ ., family = binomial, data = datos.train)
+summary(RL)
+```
+```{r}
+pred.train <- predict(RL, type = 'response', ndata = datos.train)
+pred.train <- ifelse(pred.train > 0.5, 1, 0)
+pred.train <- factor(pred.train, levels = c("0", "1"), labels = c("No", "Si"))
+```
+```{r}
+matrizConfusionTRL <- table(datos.train$Survived, pred.train)
+matrizConfusionTRL
+```
+Matriz de confusión en conjunto
+```{r}
+pred.valid <- predict(RL, type = 'response', newdata = datos.test)
+pred.valid <- ifelse(pred.valid > 0.5, 1, 0)
+pred.valid <- factor(pred.valid, levels = c("0", "1"), labels = c("No", "Si"))
+matrizConfusionPRL <- table(test.set$Survived, pred.valid)
+matrizConfusionPRL
+```
+```{r}
+indicadores.calidad(matrizConfusionPRL)
+```
+
+Considero que las mejores métricas las tiene la regresión logística, donde la precisión global es la mayor, el error es el menor y la precisión de falsos positivos y falsos negaticos es la que mejor posiciona al modelo.
+
+```{r}
+precision<-c((matrizConfusionTRL[1,1] + matrizConfusionTRL[2,2])/sum(matrizConfusionTRL),
+            (matrizConfusionBayes[1,1] + matrizConfusionBayes[2,2])/sum(matrizConfusionBayes),
+            (matrizConfusionDT[1,1] + matrizConfusionDT[2,2])/sum(matrizConfusionDT),
+            (matrizConfusionRF[1,1] + matrizConfusionRF[2,2])/sum(matrizConfusionRF),
+            (matrizConfusionSVM[1,1] + matrizConfusionSVM[2,2])/sum(matrizConfusionSVM)
+             )
+
+curva.ROC<-c(auc.prl@y.values[[1]],
+             auc.pBayes@y.values[[1]],
+             auc.pDT@y.values[[1]],
+             auc.pRF@y.values[[1]],
+             auc.pSVM@y.values[[1]])
+  
+resultados<-data.frame(
+  Precisión = precision,
+  Error = 1-precision,
+  ROC = curva.ROC
+)
+
+row.names(resultados)<-c("Regresión Logística","Bayes","Árboles","Bosques","Máquinas")
+
+DT:::datatable(resultados)%>% 
+            formatPercentage(colnames(resultados),2)
+```
+## 5. Realice 20 veces la calibración de estos modelos (utilizar el código visto en clases)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
